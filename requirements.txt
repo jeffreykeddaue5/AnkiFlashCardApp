@@ -1,0 +1,8 @@
+# Anki Drill needs Qt only. Everything else it uses is in the Python standard library.
+#
+#   pip install -r requirements.txt
+#
+# PyQtWebEngine is strongly recommended but optional: without it the app still runs, using a
+# plain QTextBrowser card that does not animate the flip and ignores deck CSS.
+PyQt5>=5.12
+PyQtWebEngine>=5.12

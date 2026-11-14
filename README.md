@@ -18,7 +18,77 @@ python3 run.py
 
 No install step and no dependencies beyond PyQt5 (plus PyQtWebEngine, optional — see below).
 
-## What it studies
+## Today's recommended list
+
+This is the default. Sync Anki, open the app, and the list is already there. It is built
+from your synced collection plus the app's own typing record, and doesn't need Claude or
+any other outside step. Cards are placed by their most urgent reason, and each card shows
+all of its reasons as badges:
+
+| Priority | Badge | Gets in when |
+|---|---|---|
+| 1 | 📌 Pinned | pinned today or yesterday (see [Pinned cards](#pinned-cards)) |
+| 2 | ⚠ Trouble word | tagged `use_trouble`, **or** Again pressed 2+ times on reviews in the last 14 days, **or** typed wrong here on 2+ different days in the last 14 |
+| 3 | ✕ Missed today | Again pressed in Anki today |
+| 4 | ⌨ Typed wrong | typed wrong in this app in the last 7 days |
+| 5 | ↻ Due | due for review today |
+| 6 | 🩹 Keeps lapsing | a review card that has lapsed 3+ times |
+| 7 | ★ New | today's new-card allowance |
+| 8 | ✓ Done today | already answered today |
+
+Again presses during a new card's first learning steps don't count toward "trouble". Everyone
+misses a word a few times on the day they meet it.
+
+**Top 20/30/40/60/All** caps the list (default 40), trimming from the least urgent end. The
+header shows the breakdown, e.g. `📌 16  ⚠ 26  ↻ 5  (top 40 of 94)`. Shuffle only mixes
+cards within the same priority level. **Custom queues** brings back the original Due / New /
+Reviewed / Pinned checkboxes described below.
+
+## Typing mode
+
+The **Mode** control (`T` cycles it) decides how each card is studied:
+
+- **Auto** (default): flip a card the first time and type it after that, from round 2 on.
+  Pinned, trouble, missed-today, typed-wrong and lapsing cards are typed straight away.
+- **Flip only** / **Type all**: one way for every card.
+
+A typing card asks for the Korean. Its example sentence is shown with the word blanked
+out, so you type the word *with* its ending or particle:
+
+    get motion sick, carsick
+    버스를 오래 타면 ______.
+    I get carsick if I ride the bus for a long time.          → 멀미해요
+
+The gap is found automatically. A conjugated or irregular form is matched letter by letter
+(들뜨다 finds 들떠요), and a **bold** part of the sentence, or a `Korean Type` note's marked
+gap and Chunk, is used as is. A note without a usable sentence asks for the word itself,
+and any form on its `Conj:` line also counts as correct.
+
+| Key | In the answer box |
+|---|---|
+| `Enter` | Check · then next card |
+| `Ctrl+H` / **Hint** | Next hint: `○○○○` → initial consonants `ㅁㅁㅎㅇ` → `멀○○○` |
+| `Ctrl+Enter` / **That was a typo** | Count an "almost" answer as correct |
+| **Show answer** | "I don't know": reveals the answer like a wrong one |
+
+Checking ignores spacing and punctuation and compares letter by letter (jamo):
+
+- **✓ Correct**: retired for the session (if no hint was used), and the card's audio plays.
+- **≈ Almost**: one letter off (two for long answers). Enter keeps the card for another
+  round. Ctrl+Enter counts it as a typo.
+- **✕ Not quite**: the wrong syllables are marked, with a note such as
+  `헤 → 해 (vowel ㅔ → ㅐ)`. You must **type the correct answer once** to move on, and the card
+  comes back next round.
+
+While the answer box is up, the single-letter shortcuts are switched off so they type
+instead. A Korean syllable still being composed by the input method when you press Enter is
+included in the answer.
+
+Results are saved to `~/.local/share/anki-drill/typing-stats.json` (misses by day,
+correct streak per note). That file feeds the ⌨ and ⚠ reasons above. Nothing is written to
+Anki.
+
+## Custom queues (what it studied before)
 
 The three checkboxes across the top map onto Anki's own scheduler, and show live counts for
 the selected deck. All three are on by default:
@@ -148,7 +218,7 @@ Cards are rendered from your real Anki note templates, not just dumped fields:
 
 - `{{Field}}`, `{{FrontSide}}`, `{{Tags}}`, `{{Type}}`, `{{Deck}}`, `{{Subdeck}}`, `{{Card}}`
 - Conditional sections `{{#Field}}…{{/Field}}` and `{{^Field}}…{{/Field}}`
-- Filters `text:`, `cloze:`, `hint:`, `type:` (shown as a placeholder — there is no typing box)
+- Filters `text:`, `cloze:`, `hint:`, `type:` (a placeholder on the flip card; typing mode has its own answer box)
 - Cloze deletions `{{c1::answer::hint}}`, blanked on the front and highlighted on the back
 - Your deck's own CSS, applied to a `.card` wrapper exactly as Anki does
 - Images from `collection.media`
@@ -191,7 +261,7 @@ QTWEBENGINE_CHROMIUM_FLAGS="--disable-gpu --no-sandbox" python3 run.py
 python3 -m pytest test/ -q
 ```
 
-148 tests. Most need neither Qt nor a real Anki install: day arithmetic, queue selection,
+225 tests. Most need neither Qt nor a real Anki install: day arithmetic, queue selection,
 daily new-card allowances, the reviewed-today revlog query, the pin-tag rules and add-on
 detection, protobuf parsing, template and cloze rendering, the round/session logic, the
 status filter, and reading a purpose-built collection — including checks that the snapshot really is read-only and that the temp copy
