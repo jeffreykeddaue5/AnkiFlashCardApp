@@ -211,4 +211,3 @@ should. It skips itself if PyQt5 or QtWebEngine is missing, and accounts for mos
   and leave cards in a learning step, they will not show up here.
 - No `{{tts:…}}` speech, no typed-answer checking, no LaTeX rendering.
 - If Anki is open and you study something, hit `F5` to pick up the change.
-# AnkiFlashCardApp
