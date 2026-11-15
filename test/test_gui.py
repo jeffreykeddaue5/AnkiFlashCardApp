@@ -669,6 +669,51 @@ class TestTypingMode(object):
         assert koreanWindow.typingInput.text() == "12"
         assert koreanWindow.session.current().cardId == first.cardId
 
+    def test_arrowsMoveBetweenCardsWhenTheBoxIsEmpty(self, koreanWindow):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtTest import QTest
+        typeAll(koreanWindow)
+        first = koreanWindow.session.current()
+        QTest.keyClick(koreanWindow.typingInput, Qt.Key_Right)
+        pump(300)
+        assert koreanWindow.session.current().cardId != first.cardId
+        QTest.keyClick(koreanWindow.typingInput, Qt.Key_Left)
+        pump(300)
+        assert koreanWindow.session.current().cardId == first.cardId
+
+    def test_arrowsMoveTheCursorWhileTyping(self, koreanWindow):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtTest import QTest
+        typeAll(koreanWindow)
+        first = koreanWindow.session.current()
+        koreanWindow.typingInput.setText("개운")
+        QTest.keyClick(koreanWindow.typingInput, Qt.Key_Left)
+        pump(200)
+        assert koreanWindow.session.current().cardId == first.cardId
+        assert koreanWindow.typingInput.cursorPosition() == 1
+
+    def test_altArrowsMoveEvenMidWord(self, koreanWindow):
+        typeAll(koreanWindow)
+        first = koreanWindow.session.current()
+        koreanWindow.typingInput.setText("개운")
+        koreanWindow._shortcuts["Alt+Right"].activated.emit()
+        pump(300)
+        assert koreanWindow.session.current().cardId != first.cardId
+
+    def test_goingBackToAMissedWordStartsFresh(self, koreanWindow):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtTest import QTest
+        typeAll(koreanWindow)
+        first = koreanWindow.session.current()
+        submit(koreanWindow, "좋아요")
+        submit(koreanWindow, "개운해요")       # retyped: moves on
+        assert koreanWindow.session.current().cardId != first.cardId
+        QTest.keyClick(koreanWindow.typingInput, Qt.Key_Left)
+        pump(300)
+        assert koreanWindow.session.current().cardId == first.cardId
+        assert koreanWindow.typing["phase"] == "answer"
+        assert koreanWindow.typingInput.text() == ""
+
     def test_ctrlHShowsAHintWhileTyping(self, koreanWindow):
         from PyQt5.QtCore import Qt
         from PyQt5.QtTest import QTest

@@ -70,6 +70,8 @@ and any form on its `Conj:` line also counts as correct.
 | `Ctrl+H` / **Hint** | Next hint: `○○○○` → initial consonants `ㅁㅁㅎㅇ` → `멀○○○` |
 | `Ctrl+Enter` / **That was a typo** | Count an "almost" answer as correct |
 | **Show answer** | "I don't know": reveals the answer like a wrong one |
+| `←` / `→` | Previous / next card, when the box is empty or the answer is checked (otherwise they move the cursor) |
+| `Alt+←` / `Alt+→` | Previous / next card, always, even mid-word |
 
 Checking ignores spacing and punctuation and compares letter by letter (jamo):
 
@@ -162,6 +164,7 @@ The session runs in **rounds**. You go through every card once; anything you mar
 | `Space` | Flip the card |
 | `→` / `Enter` | Next card |
 | `←` | Previous card |
+| `Alt+←` / `Alt+→` | Previous / next card (also works while typing) |
 | `1` | Still learning — keep it for the next round |
 | `2` | Got it — retire it for this session |
 | `B` | Toggle front-first / back-first |

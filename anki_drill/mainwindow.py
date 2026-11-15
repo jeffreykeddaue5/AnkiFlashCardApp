@@ -383,6 +383,8 @@ class DrillWindow(QMainWindow):
         self.typingInput.setPlaceholderText("Type the Korean, then Enter")
         self.typingInput.submitted.connect(self._onTypingSubmitted)
         self.typingInput.accepted.connect(self._acceptAsTypo)
+        self.typingInput.navigate.connect(
+            lambda step: self.goPrev() if step < 0 else self.goNext())
         row.addWidget(self.typingInput, 1)
 
         self.hintButton = QPushButton("Hint")
@@ -482,6 +484,9 @@ class DrillWindow(QMainWindow):
             ("Return", self.goNext),
             ("Enter", self.goNext),
             ("Left", self.goPrev),
+            # Always free, even mid-word in the answer box (plain arrows move its cursor).
+            ("Alt+Left", self.goPrev),
+            ("Alt+Right", self.goNext),
             ("1", lambda: self.gradeCurrent(STATUS_LEARNING)),
             ("2", lambda: self.gradeCurrent(STATUS_KNOWN)),
             ("B", self.toggleBackFirst),
