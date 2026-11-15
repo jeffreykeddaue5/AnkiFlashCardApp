@@ -15,9 +15,36 @@ try:
 except ImportError:  # pragma: no cover - the app falls back to a QTextBrowser card view
     pass
 
-from PyQt5.QtWidgets import QApplication  # noqa: E402  (must follow the attribute call)
+import threading  # noqa: E402
 
+from PyQt5.QtGui import QPixmap  # noqa: E402
+from PyQt5.QtWidgets import QApplication, QSplashScreen  # noqa: E402  (must follow the attribute call)
+
+from . import ankisync  # noqa: E402
+from .collection import findProfiles  # noqa: E402
 from .mainwindow import DrillWindow  # noqa: E402
+
+
+def syncWithSplash(app):
+    """Sync with AnkiWeb before the collection is read, keeping a splash responsive."""
+    if not ankisync.ankiAvailable():
+        return []
+    pixmap = QPixmap(420, 90)
+    pixmap.fill(Qt.white)
+    splash = QSplashScreen(pixmap)
+    splash.showMessage("Syncing with AnkiWeb…", Qt.AlignCenter, Qt.black)
+    splash.show()
+    app.processEvents()
+
+    results = []
+    worker = threading.Thread(
+        target=lambda: results.extend(ankisync.syncAll(findProfiles())), daemon=True)
+    worker.start()
+    while worker.is_alive():
+        app.processEvents()
+        worker.join(0.05)
+    splash.close()
+    return results
 
 
 def main(argv=None):
@@ -26,6 +53,12 @@ def main(argv=None):
     app.setApplicationName("Anki Drill")
     app.setApplicationDisplayName("Anki Drill")
 
+    results = syncWithSplash(app)
+    for line in results:
+        print(line, file=sys.stderr)
+
     window = DrillWindow()
+    if results:
+        window.statusBar().showMessage(" · ".join(results), 15000)
     window.show()
     return app.exec_()
