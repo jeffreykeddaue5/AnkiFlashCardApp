@@ -17,14 +17,15 @@ from PyQt5.QtWidgets import (
 
 from .cardview import createCardView
 from .persistence import (
-    applySessionState, clearSessionState, loadSessionState, loadTypingStats,
-    recordTypingResult, saveSessionState, saveTypingStats, serialiseSession)
+    applySessionState, clearSessionState, loadSessionState, loadSettings, loadTypingStats,
+    recordTypingResult, saveSessionState, saveSettings, saveTypingStats, serialiseSession)
 from .collection import (
     CollectionSnapshot, candidateRoots, findProfiles, pinningAvailable,
     profileForCollection)
 from .production import (
-    MAX_HINT_LEVEL, RESULT_ALMOST, RESULT_CORRECT, RESULT_WRONG, buildTypingSpec,
-    checkAnswer, matchesForRetype, promptHtml, resultHtml)
+    ANSWER_DICTIONARY, ANSWER_ENGLISH, ANSWER_FORMS, ANSWER_SENTENCE, MAX_HINT_LEVEL,
+    MODE_ENGLISH, RESULT_ALMOST, RESULT_CORRECT, RESULT_WRONG, buildTypingSpec,
+    checkAnswer, matchesForRetype, promptHtml, resultHtml, typingSummary)
 from .recommend import (
     DEFAULT_LIMIT, REASON_LEECH, REASON_MISSED, REASON_PINNED, REASON_TROUBLE, REASON_TYPED,
     badgeText, buildRecommended, primaryReason, summaryText)
@@ -55,11 +56,54 @@ TYPE_FIRST_REASONS = frozenset(
 # Typing phases for the card on screen.
 PHASE_ANSWER = "answer"     # waiting for the first attempt
 PHASE_CHECKED = "checked"   # verdict shown, Enter moves on
-PHASE_RETYPE = "retype"     # wrong: copy the answer once to move on
+PHASE_RETYPE = "retype"     # wrong or revealed: optionally copy the answer, Enter moves on
+
+# The Answer control: what a typing card asks for.
+ANSWER_LABELS = (
+    (ANSWER_DICTIONARY, "Korean: dictionary form"),
+    (ANSWER_SENTENCE, "Korean: sentence form"),
+    (ANSWER_ENGLISH, "English meaning"),
+)
+
+# Clean answers in a row that "Drill this card" asks for before letting the card go.
+DRILL_TARGET = 3
+
+# The ? / F1 overlay.
+KEYBOARD_HELP = """
+<h3>Keyboard</h3>
+<table cellspacing="0" cellpadding="3">
+<tr><td colspan="2"><b>Flip cards</b></td></tr>
+<tr><td>Space / click</td><td>Flip</td></tr>
+<tr><td>← / →, Enter</td><td>Previous / next card</td></tr>
+<tr><td>1 / 2</td><td>Still learning / Got it</td></tr>
+<tr><td>Esc</td><td>Back to the front</td></tr>
+<tr><td colspan="2"><br><b>Typing cards</b></td></tr>
+<tr><td>Enter</td><td>Check · then next card</td></tr>
+<tr><td>Show answer</td><td>Just look (a peek); Enter on an empty box moves on</td></tr>
+<tr><td>↑ / ↓, Flip, click</td><td>Once revealed: switch between prompt and answer</td></tr>
+<tr><td>Esc</td><td>Try this card again</td></tr>
+<tr><td>Ctrl+D</td><td>Drill this card until you get it %d times in a row</td></tr>
+<tr><td>Ctrl+H</td><td>Next hint</td></tr>
+<tr><td>Ctrl+Enter</td><td>That was a typo / I was right</td></tr>
+<tr><td>← / →</td><td>Previous / next card when the box is empty or checked</td></tr>
+<tr><td>Alt+← / Alt+→</td><td>Previous / next card, always</td></tr>
+<tr><td colspan="2"><br><b>Anywhere</b> (not while typing an answer)</td></tr>
+<tr><td>T</td><td>Cycle Mode (Auto / Flip only / Type all)</td></tr>
+<tr><td>A</td><td>Cycle Answer (dictionary / sentence / English)</td></tr>
+<tr><td>B</td><td>Show the back first</td></tr>
+<tr><td>S</td><td>Shuffle</td></tr>
+<tr><td>F</td><td>Cycle the Show filter</td></tr>
+<tr><td>R</td><td>Replay audio</td></tr>
+<tr><td>F5 / Ctrl+R</td><td>Reload the collection</td></tr>
+<tr><td>Ctrl+ + / Ctrl+ −</td><td>Text size</td></tr>
+<tr><td>? / F1</td><td>This help</td></tr>
+</table>
+""" % DRILL_TARGET
 
 # Single-key shortcuts that would steal keystrokes from the answer box.
 TYPING_CONFLICTS = frozenset(
-    ["Space", "Right", "Return", "Enter", "Left", "1", "2", "B", "S", "F", "R", "T"])
+    ["Space", "Right", "Return", "Enter", "Left", "1", "2", "B", "S", "F", "R", "T", "A",
+     "?"])
 
 # Human names for the grade filter, used in the "nothing matches" message.
 QUEUE_GRADE_LABELS = {
@@ -155,6 +199,15 @@ class DrillWindow(QMainWindow):
         self._specCache = {}
         self.typing = None
         self._shortcuts = {}
+        self.settings = loadSettings()
+        self.answerForm = self.settings.get("answerForm", ANSWER_DICTIONARY)
+        if self.answerForm not in ANSWER_FORMS:
+            self.answerForm = ANSWER_DICTIONARY
+        # card id -> what happened when it was typed this session (for the summary).
+        self.sessionLog = {}
+        # "Drill this card": the card being drilled and its clean answers in a row.
+        self.drillCardId = None
+        self.drillStreak = 0
 
         self._buildUi()
         self._buildShortcuts()
@@ -327,6 +380,20 @@ class DrillWindow(QMainWindow):
         row.addWidget(self.modeCombo)
 
         row.addSpacing(12)
+        row.addWidget(QLabel("Answer"))
+        self.answerCombo = QComboBox()
+        for value, label in ANSWER_LABELS:
+            self.answerCombo.addItem(label, value)
+        self.answerCombo.setCurrentIndex(self.answerCombo.findData(self.answerForm))
+        self.answerCombo.setToolTip(
+            "What a typing card asks for  (A to cycle)\n"
+            "Dictionary form: 개운하다 (the sentence's 개운해요 also counts)\n"
+            "Sentence form: the conjugated word that fills the example's gap\n"
+            "English meaning: see the Korean, type what it means")
+        self.answerCombo.currentIndexChanged.connect(self._onAnswerFormChanged)
+        row.addWidget(self.answerCombo)
+
+        row.addSpacing(12)
         self.shuffleCheck = QCheckBox("Shuffle")
         self.shuffleCheck.stateChanged.connect(self._onShuffleToggled)
         row.addWidget(self.shuffleCheck)
@@ -346,6 +413,12 @@ class DrillWindow(QMainWindow):
             row.addWidget(button)
 
         row.addStretch(1)
+        self.helpButton = QPushButton("?")
+        self.helpButton.setToolTip("Keyboard shortcuts (? or F1)")
+        self.helpButton.setFocusPolicy(Qt.NoFocus)
+        self.helpButton.setFixedWidth(34)
+        self.helpButton.clicked.connect(self.showKeyboardHelp)
+        row.addWidget(self.helpButton)
         self.restartButton = QPushButton("Restart session")
         self.restartButton.clicked.connect(self.restartSession)
         row.addWidget(self.restartButton)
@@ -385,6 +458,9 @@ class DrillWindow(QMainWindow):
         self.typingInput.accepted.connect(self._acceptAsTypo)
         self.typingInput.navigate.connect(
             lambda step: self.goPrev() if step < 0 else self.goNext())
+        # Up/Down only swap faces once the answer is out; they never reveal it.
+        self.typingInput.flipRequested.connect(
+            lambda: self.typing and self.typing["phase"] != PHASE_ANSWER and self.flipCard())
         row.addWidget(self.typingInput, 1)
 
         self.hintButton = QPushButton("Hint")
@@ -398,9 +474,22 @@ class DrillWindow(QMainWindow):
         self.typoButton.clicked.connect(self._acceptAsTypo)
         row.addWidget(self.typoButton)
 
-        for button in (self.hintButton, self.typoButton):
+        self.drillButton = QPushButton("🎯 Drill this card")
+        self.drillButton.setCheckable(True)
+        self.drillButton.setToolTip(
+            "Keep this card until you type it right %d times in a row (Ctrl+D)" % DRILL_TARGET)
+        self.drillButton.clicked.connect(self.toggleDrill)
+        row.addWidget(self.drillButton)
+
+        self.retryButton = QPushButton("↻  Try again")
+        self.retryButton.setToolTip("Hide the answer and type this card again (Esc)")
+        self.retryButton.clicked.connect(self.retryCard)
+        row.addWidget(self.retryButton)
+
+        for button in (self.hintButton, self.typoButton, self.drillButton, self.retryButton):
             button.setFocusPolicy(Qt.NoFocus)
         self.typoButton.setVisible(False)
+        self.retryButton.setVisible(False)
         self.typingRow.setVisible(False)
         return self.typingRow
 
@@ -494,6 +583,10 @@ class DrillWindow(QMainWindow):
             ("F", self.cycleStatusFilter),
             ("R", self.replayAudio),
             ("T", self.cycleMode),
+            ("A", self.cycleAnswerForm),
+            ("?", self.showKeyboardHelp),
+            ("F1", self.showKeyboardHelp),
+            ("Ctrl+D", self.toggleDrill),
             ("Ctrl+H", self.showTypingHint),
             ("F5", self.reloadCollection),
             ("Ctrl+R", self.reloadCollection),
@@ -506,6 +599,10 @@ class DrillWindow(QMainWindow):
             shortcut.setContext(Qt.ApplicationShortcut)
             shortcut.activated.connect(handler)
             self._shortcuts[sequence] = shortcut
+        # Window-only, so Esc still closes dialogs opened from here.
+        retry = QShortcut(QKeySequence("Escape"), self)
+        retry.activated.connect(self.retryCard)
+        self._shortcuts["Escape"] = retry
 
     # ---------------------------------------------------------------- collection
 
@@ -720,6 +817,8 @@ class DrillWindow(QMainWindow):
                 self._selectedDeckIds(), self._selectedQueues(),
                 self.today, self.newAllowances, self.dayStartMs)
         self.typing = None
+        self.sessionLog = {}
+        self._stopDrill()
         self.session = StudySession(cards, shuffle=self.shuffleCheck.isChecked(),
                                     groupOf=groupOf)
         self._loadPersistedSession()
@@ -731,6 +830,8 @@ class DrillWindow(QMainWindow):
     def restartSession(self):
         """Start the current card set again from round one."""
         self.typing = None
+        self.sessionLog = {}
+        self._stopDrill()
         self.session.reset()
         self._clearPersistedSession()
         self.resetStatusFilter()
@@ -784,6 +885,8 @@ class DrillWindow(QMainWindow):
             self._showEmptyState()
             return
 
+        if self.drillCardId is not None and self.drillCardId != card.cardId:
+            self._stopDrill()
         if self._shouldType(card):
             if self.typing is None or self.typing["cardId"] != card.cardId:
                 self.typing = {"cardId": card.cardId, "spec": self._typingSpec(card),
@@ -817,6 +920,8 @@ class DrillWindow(QMainWindow):
                 bits.insert(0, badges)
         if self.typing is not None:
             bits.insert(0, "⌨ typing")
+        if self.drillCardId == card.cardId:
+            bits.insert(0, "🎯 drill %d/%d" % (self.drillStreak, DRILL_TARGET))
         self.cardInfoLabel.setText("  ·  ".join(bits))
 
     # ---------------------------------------------------------------- typing mode
@@ -829,7 +934,8 @@ class DrillWindow(QMainWindow):
         spec = None
         if notetype is not None:
             values = list(card.fields) + [""] * max(0, len(notetype.fields) - len(card.fields))
-            spec = buildTypingSpec(dict(zip(notetype.fields, values)))
+            spec = buildTypingSpec(dict(zip(notetype.fields, values)),
+                                   answerForm=self.answerForm)
         self._specCache[card.cardId] = spec
         return spec
 
@@ -857,7 +963,8 @@ class DrillWindow(QMainWindow):
                 shortcut.setEnabled(not visible)
         if visible:
             self.typingInput.setFocus()
-        self.flipButton.setText("Show answer" if visible else "Flip")
+        else:
+            self.flipButton.setText("Flip")
 
     def _setTypingPhase(self, phase):
         """Move the typing card to `phase` and restyle the box to match."""
@@ -867,14 +974,19 @@ class DrillWindow(QMainWindow):
         self.typingInput.style().unpolish(self.typingInput)
         self.typingInput.style().polish(self.typingInput)
         result = self.typing.get("result")
-        self.typoButton.setVisible(
-            phase == PHASE_CHECKED and result is not None and result.verdict == RESULT_ALMOST)
+        self.typoButton.setVisible(self._canAcceptAsRight())
+        self.typoButton.setText("I was right ✓" if self.typing["spec"].mode == MODE_ENGLISH
+                                else "That was a typo ✓")
         self.hintButton.setEnabled(
             phase == PHASE_ANSWER and self.typing["hint"] < MAX_HINT_LEVEL)
+        self.retryButton.setVisible(phase != PHASE_ANSWER)
+        self.drillButton.setChecked(self.drillCardId == self.typing["cardId"])
+        self.flipButton.setText("Show answer" if phase == PHASE_ANSWER else "Flip")
+        english = self.typing["spec"].mode == MODE_ENGLISH
         placeholders = {
-            PHASE_ANSWER: "Type the Korean, then Enter",
-            PHASE_CHECKED: "Enter: next card",
-            PHASE_RETYPE: "Type the answer shown above, then Enter",
+            PHASE_ANSWER: "Type the %s, then Enter" % ("English" if english else "Korean"),
+            PHASE_CHECKED: "Enter: next card  ·  Esc: try again  ·  ↑↓: flip",
+            PHASE_RETYPE: "Copy the answer to practise, or Enter to move on  ·  Esc: try again",
         }
         self.typingInput.setPlaceholderText(placeholders[phase])
 
@@ -903,14 +1015,18 @@ class DrillWindow(QMainWindow):
         self._renderTyping(animate=False)
         self.typingInput.setFocus()
 
-    def _recordTyping(self, correct):
+    def _recordTyping(self, correct, peeked=False):
         """Save one typed result to the app's own stats file (never to Anki)."""
         card = self.session.current()
         if card is None or self.typing is None or self.typing.get("recorded"):
             return
         self.typing["recorded"] = True
+        # Korean → English answers are a different skill; they stay out of the Korean
+        # typing record that feeds the recommended list.
+        if self.typing["spec"].mode == MODE_ENGLISH:
+            return
         recordTypingResult(self.typingStats, card.noteId, self.today, correct,
-                           word=self.typing["spec"].answer)
+                           word=self.typing["spec"].answer, peeked=peeked)
         try:
             saveTypingStats(self.typingStats)
         except (IOError, OSError):
@@ -928,7 +1044,13 @@ class DrillWindow(QMainWindow):
                 return
             result = checkAnswer(text, spec)
             self.typing["result"] = result
-            if result.verdict == RESULT_WRONG:
+            self.typing["peeked"] = giveUp
+            self._logAttempt(result, giveUp)
+            if giveUp:
+                self._recordTyping(False, peeked=True)
+                self.typingInput.clearAnswer()
+                self.typing["phase"] = PHASE_RETYPE
+            elif result.verdict == RESULT_WRONG:
                 self._recordTyping(False)
                 self.typingInput.clearAnswer()
                 self.typing["phase"] = PHASE_RETYPE
@@ -943,26 +1065,73 @@ class DrillWindow(QMainWindow):
             result = self.typing["result"]
             if result.verdict == RESULT_ALMOST:
                 self._recordTyping(False)
-            clean = result.verdict == RESULT_CORRECT and not self.typing["hint"]
+            right = result.verdict == RESULT_CORRECT and not self.typing["hint"]
+            if self._drillStep(right):
+                return
+            clean = right and not self.typing.get("missed")
             self.gradeCurrent(STATUS_KNOWN if clean else STATUS_LEARNING)
             return
 
         if phase == PHASE_RETYPE:
-            if matchesForRetype(text, spec):
+            # Copying the answer is optional practice; an empty Enter just moves on.
+            if not text.strip() or matchesForRetype(text, spec):
+                if self._drillStep(False):
+                    return
                 self.gradeCurrent(STATUS_LEARNING)
             else:
                 self.typingInput.clearAnswer()
                 self.typingInput.setPlaceholderText(
                     "Not quite. Copy the answer above exactly, then Enter")
 
+    def _canAcceptAsRight(self):
+        """Whether "That was a typo" / "I was right" applies to the answer on screen: an
+        "almost", or any real attempt at an English meaning (there are many ways to say
+        it, so the user is the judge)."""
+        if self.typing is None or self.typing["phase"] == PHASE_ANSWER:
+            return False
+        result = self.typing.get("result")
+        if result is None or self.typing.get("peeked"):
+            return False
+        if self.typing["phase"] == PHASE_CHECKED and result.verdict == RESULT_ALMOST:
+            # A wrong form of the right word is not a slip of the finger.
+            return not result.formOnly
+        return self.typing["spec"].mode == MODE_ENGLISH and result.verdict == RESULT_WRONG
+
+    def _logAttempt(self, result, giveUp):
+        """Add one answer to this session's typing log, for the end-of-round stats."""
+        card = self.session.current()
+        if card is None:
+            return
+        entry = self.sessionLog.setdefault(card.cardId, {
+            "word": self.typing["spec"].answer if self.typing["spec"].mode != MODE_ENGLISH
+            else self.typing["spec"].prompt,
+            "tries": 0, "misses": 0, "peeks": 0, "firstTry": None})
+        entry["tries"] += 1
+        if giveUp:
+            entry["peeks"] += 1
+            outcome = "peek"
+        elif result.verdict != RESULT_CORRECT:
+            entry["misses"] += 1
+            outcome = result.verdict
+        else:
+            outcome = "hint" if self.typing["hint"] else "correct"
+        if entry["firstTry"] is None:
+            entry["firstTry"] = outcome
+
     def _acceptAsTypo(self):
-        """Count an "almost" answer as correct: it was a slip of the finger."""
-        if self.typing is None or self.typing["phase"] != PHASE_CHECKED:
+        """Count an "almost" (or a disputed English) answer as correct."""
+        if not self._canAcceptAsRight():
             return
-        result = self.typing["result"]
-        if result is None or result.verdict != RESULT_ALMOST:
+        card = self.session.current()
+        entry = self.sessionLog.get(card.cardId) if card is not None else None
+        if entry is not None and entry["misses"]:
+            # Undo the miss this attempt logged; if it was the first try, it was right.
+            entry["misses"] -= 1
+            if entry["tries"] == 1:
+                entry["firstTry"] = "hint" if self.typing["hint"] else "correct"
+        if self._drillStep(not self.typing["hint"]):
             return
-        if not self.typing["hint"]:
+        if not self.typing["hint"] and not self.typing.get("missed"):
             self._recordTyping(True)
             self.gradeCurrent(STATUS_KNOWN)
         else:
@@ -1043,6 +1212,9 @@ class DrillWindow(QMainWindow):
         else:
             message = ("Round %d done.\n\nYou knew all %d cards. Nice."
                        % (self.session.roundNumber, size))
+        stats = typingSummary(self.sessionLog)
+        if stats:
+            message += "\n\n" + stats
         self.cardView.showMessage(message)
         self.statusLabel.setText(
             "Round %d complete  ·  ✓ %d known  ·  ✕ %d to repeat"
@@ -1063,9 +1235,12 @@ class DrillWindow(QMainWindow):
         """Every card has been marked known — offer only a fresh start."""
         self.typing = None
         self._setTypingVisible(False)
-        self.cardView.showMessage(
-            "Session complete.\n\nYou marked all %d cards as known."
-            % self.session.knownTotal)
+        message = ("Session complete.\n\nYou marked all %d cards as known."
+                   % self.session.knownTotal)
+        stats = typingSummary(self.sessionLog)
+        if stats:
+            message += "\n\n" + stats
+        self.cardView.showMessage(message)
         self.nextRoundButton.setEnabled(False)
         self.nextRoundButton.setText("Nothing left to review")
         self.replayButton.setEnabled(False)
@@ -1081,18 +1256,118 @@ class DrillWindow(QMainWindow):
         if self.session.current() is None or self._onSummary():
             return
         if self.typing is not None:
-            # On a typing card the Flip button means "I don't know": show the answer and
-            # ask for it to be copied once, like a wrong answer.
+            # Before answering, Flip means "I don't know": reveal the answer (counted as a
+            # miss). Once it is revealed, Flip swaps between the prompt and the answer.
             if self.typing["phase"] == PHASE_ANSWER:
                 self._onTypingSubmitted("", giveUp=True)
+            else:
+                self.isFlipped = not self.isFlipped
+                self.cardView.setFlipped(self.isFlipped)
+                self.typingInput.setFocus()
             return
         self.isFlipped = not self.isFlipped
         self.cardView.setFlipped(self.isFlipped)
 
+    def retryCard(self):
+        """Practise the current card again: hide the answer and start a fresh attempt.
+
+        A miss earlier on this card still counts, so the card comes back next round even
+        if the retry is clean. Its result is only recorded to the typing stats once.
+        """
+        if self.session.current() is None or self._onSummary():
+            return
+        if self.typing is None:
+            if self.isFlipped:
+                self.isFlipped = False
+                self.cardView.setFlipped(False)
+            return
+        if self.typing["phase"] == PHASE_ANSWER:
+            return
+        result = self.typing["result"]
+        if self.typing["hint"] or result is None or result.verdict != RESULT_CORRECT:
+            self.typing["missed"] = True
+        self.typing.update({"hint": 0, "phase": PHASE_ANSWER, "result": None})
+        self.typingInput.clearAnswer()
+        self._renderTyping(animate=False)
+        self.typingInput.setFocus()
+
+    def toggleDrill(self):
+        """Start or stop drilling the current typing card until it is right DRILL_TARGET
+        times in a row."""
+        card = self.session.current()
+        if card is None or self._onSummary() or self.typing is None:
+            self.drillButton.setChecked(False)
+            return
+        if self.drillCardId == card.cardId:
+            self._stopDrill()
+        else:
+            self.drillCardId = card.cardId
+            self.drillStreak = 0
+        self.drillButton.setChecked(self.drillCardId is not None)
+        self._refreshCardInfo(card)
+        self.typingInput.setFocus()
+
+    def _stopDrill(self):
+        """Leave drill mode."""
+        self.drillCardId = None
+        self.drillStreak = 0
+        if hasattr(self, "drillButton"):
+            self.drillButton.setChecked(False)
+
+    def _drillStep(self, right):
+        """While drilling, count an answer and go round again. Returns True when the
+        card should stay on screen; False once the drill is over (or not running)."""
+        card = self.session.current()
+        if card is None or self.drillCardId != card.cardId:
+            return False
+        self.drillStreak = self.drillStreak + 1 if right else 0
+        if self.drillStreak >= DRILL_TARGET:
+            # Drilled: it goes on with the normal grade (still "learning" if it was
+            # ever missed, so it comes back next round).
+            self._stopDrill()
+            return False
+        self.retryCard()
+        self._refreshCardInfo(card)
+        return True
+
+    def showKeyboardHelp(self):
+        """The keyboard cheat sheet."""
+        box = QMessageBox(self)
+        box.setWindowTitle("Keyboard shortcuts")
+        box.setTextFormat(Qt.RichText)
+        box.setText(KEYBOARD_HELP)
+        box.setStandardButtons(QMessageBox.Close)
+        box.open()
+        self._helpBox = box
+
+    def cycleAnswerForm(self):
+        """Step the Answer control: dictionary → sentence → English → dictionary."""
+        self.answerCombo.setCurrentIndex(
+            (self.answerCombo.currentIndex() + 1) % self.answerCombo.count())
+
+    def _onAnswerFormChanged(self, *_args):
+        """Remember the new Answer setting and re-ask the current card in that form."""
+        value = self.answerCombo.currentData()
+        if value == self.answerForm:
+            return
+        self.answerForm = value
+        self.settings["answerForm"] = value
+        try:
+            saveSettings(self.settings)
+        except (IOError, OSError):
+            pass
+        self._specCache = {}
+        self._stopDrill()
+        self.typing = None
+        self.isFlipped = False
+        if self.session.current() is not None and not self._onSummary():
+            self.showCurrentCard()
+
     def _onCardClicked(self):
-        """A click on the card flips it, except on a typing card, where it must not give
-        the answer away: it just puts the cursor back in the answer box."""
-        if self.typing is not None and not self._onSummary():
+        """A click on the card flips it. On a typing card it must not give the answer away
+        before it is revealed, so it just puts the cursor back in the answer box."""
+        if (self.typing is not None and not self._onSummary()
+                and self.typing["phase"] == PHASE_ANSWER):
             self.typingInput.setFocus()
             return
         self.flipCard()

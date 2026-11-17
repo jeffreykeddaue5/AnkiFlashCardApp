@@ -537,6 +537,9 @@ KOREAN_NOTES = [
 @pytest.fixture(name="koreanWindow")
 def koreanWindowFixture(qtApp, tmp_path, monkeypatch):
     """A window over two due Korean Basic notes (Front/Back/Example/Translation)."""
+    # These tests drill the sentence-gap flow; the dictionary-form default has its own test.
+    monkeypatch.setattr("anki_drill.mainwindow.loadSettings",
+                        lambda: {"answerForm": "sentence"})
     import sqlite3
     crt = int(time.time()) - 100 * 86400
     today, _next = scheduling.schedTimingToday(crt, int(time.time()), 4)
@@ -577,6 +580,11 @@ def submit(window, text):
     pump(300)
 
 
+def setAnswerForm(window, value):
+    window.answerCombo.setCurrentIndex(window.answerCombo.findData(value))
+    pump(300)
+
+
 def pageText(window):
     return evaluate(window, "document.body.innerText") or ""
 
@@ -606,6 +614,84 @@ class TestTypingMode(object):
         assert not koreanWindow.typingRow.isHidden()
         text = pageText(koreanWindow)
         assert "푹 자고 일어나서 몸이" in text and "개운해요" not in text
+
+    def test_dictionaryFormAsksForTheWordAsWritten(self, koreanWindow):
+        from anki_drill import persistence
+        typeAll(koreanWindow)
+        setAnswerForm(koreanWindow, "dictionary")
+        assert koreanWindow.typing["spec"].answer == "개운하다"
+        submit(koreanWindow, "개운하다")
+        assert koreanWindow.typing["result"].verdict == "correct"
+        assert persistence.loadSettings()["answerForm"] == "dictionary"
+
+    def test_dictionaryModeAlsoAcceptsTheSentenceForm(self, koreanWindow):
+        typeAll(koreanWindow)
+        setAnswerForm(koreanWindow, "dictionary")
+        submit(koreanWindow, "개운해요")
+        assert koreanWindow.typing["result"].verdict == "correct"
+
+    def test_sentenceModeCallsTheDictionaryFormAlmost(self, koreanWindow):
+        typeAll(koreanWindow)
+        submit(koreanWindow, "개운하다")
+        assert koreanWindow.typing["result"].verdict == "almost"
+        assert koreanWindow.typing["result"].formOnly
+
+    def test_englishModeAsksForTheMeaning(self, koreanWindow):
+        from anki_drill.session import STATUS_KNOWN
+        typeAll(koreanWindow)
+        setAnswerForm(koreanWindow, "english")
+        first = koreanWindow.session.current()
+        assert "type the english" in pageText(koreanWindow).lower()
+        submit(koreanWindow, "I feel good")
+        assert koreanWindow.typing["result"].verdict == "wrong"
+        assert koreanWindow.typoButton.text() == "I was right ✓"
+        assert not koreanWindow.typoButton.isHidden()
+        koreanWindow.typoButton.click()
+        pump(200)
+        assert koreanWindow.session.statusOf(first) == STATUS_KNOWN
+
+    def test_drillKeepsTheCardUntilThreeInARow(self, koreanWindow):
+        from anki_drill.session import STATUS_LEARNING
+        typeAll(koreanWindow)
+        first = koreanWindow.session.current()
+        koreanWindow._shortcuts["Ctrl+D"].activated.emit()
+        assert koreanWindow.drillCardId == first.cardId
+        submit(koreanWindow, "좋아요")         # wrong
+        submit(koreanWindow, "")              # skip the copy: drill goes round again
+        for _ in range(3):
+            assert koreanWindow.session.current().cardId == first.cardId
+            assert koreanWindow.typing["phase"] == "answer"
+            submit(koreanWindow, "개운해요")
+            submit(koreanWindow, "")
+        assert koreanWindow.session.current().cardId != first.cardId
+        assert koreanWindow.drillCardId is None
+        assert koreanWindow.session.statusOf(first) == STATUS_LEARNING
+
+    def test_peekIsRecordedApartFromMisses(self, koreanWindow):
+        from anki_drill import persistence as persistenceModule
+        typeAll(koreanWindow)
+        first = koreanWindow.session.current()
+        koreanWindow.flipButton.click()
+        pump(300)
+        entry = persistenceModule.loadTypingStats()[str(first.noteId)]
+        assert entry["missDays"] == [] and entry["peekDays"] == [koreanWindow.today]
+
+    def test_roundSummaryShowsTypingStats(self, koreanWindow):
+        typeAll(koreanWindow)
+        submit(koreanWindow, "좋아요")
+        submit(koreanWindow, "")
+        submit(koreanWindow, koreanWindow.typing["spec"].answer)
+        submit(koreanWindow, "")
+        pump(300)
+        text = pageText(koreanWindow)
+        assert "1 of 2 right first try" in text and "Most missed: 개운해요 ×1" in text
+
+    def test_keyboardHelpOpens(self, koreanWindow):
+        koreanWindow._shortcuts["F1"].activated.emit()
+        pump(100)
+        assert koreanWindow._helpBox.isVisible()
+        assert "Drill this card" in koreanWindow._helpBox.text()
+        koreanWindow._helpBox.close()
 
     def test_correctAnswerThenEnterRetiresTheCard(self, koreanWindow):
         from anki_drill.session import STATUS_KNOWN
@@ -741,6 +827,53 @@ class TestTypingMode(object):
         koreanWindow.flipButton.click()
         pump(300)
         assert koreanWindow.typing["phase"] == "retype"
+
+    def test_revealedAnswerCanBeSkippedWithoutRetyping(self, koreanWindow):
+        from anki_drill.session import STATUS_LEARNING
+        typeAll(koreanWindow)
+        first = koreanWindow.session.current()
+        koreanWindow.flipButton.click()
+        pump(300)
+        submit(koreanWindow, "")
+        assert koreanWindow.session.statusOf(first) == STATUS_LEARNING
+        assert koreanWindow.session.current().cardId != first.cardId
+
+    def test_revealedCardFlipsBackToThePrompt(self, koreanWindow):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtTest import QTest
+        typeAll(koreanWindow)
+        QTest.keyClick(koreanWindow.typingInput, Qt.Key_Up)   # not revealed: no peek
+        pump(100)
+        assert koreanWindow.typing["phase"] == "answer" and not koreanWindow.isFlipped
+        koreanWindow.flipButton.click()
+        pump(300)
+        assert koreanWindow.isFlipped
+        QTest.keyClick(koreanWindow.typingInput, Qt.Key_Up)
+        pump(100)
+        assert not koreanWindow.isFlipped
+        koreanWindow.flipButton.click()
+        pump(100)
+        assert koreanWindow.isFlipped
+
+    def test_tryAgainRepeatsTheSameCard(self, koreanWindow):
+        from anki_drill.session import STATUS_LEARNING
+        typeAll(koreanWindow)
+        first = koreanWindow.session.current()
+        submit(koreanWindow, "좋아요")
+        assert not koreanWindow.retryButton.isHidden()
+        koreanWindow._shortcuts["Escape"].activated.emit()
+        pump(300)
+        assert koreanWindow.session.current().cardId == first.cardId
+        assert koreanWindow.typing["phase"] == "answer"
+        assert koreanWindow.typingInput.text() == ""
+        submit(koreanWindow, "개운해요")
+        assert koreanWindow.typing["result"].verdict == "correct"
+        koreanWindow.retryButton.click()                    # again, after a correct one
+        pump(300)
+        submit(koreanWindow, "개운해요")
+        submit(koreanWindow, "")
+        # The earlier miss still counts, so the card comes back next round.
+        assert koreanWindow.session.statusOf(first) == STATUS_LEARNING
 
     def test_roundTwoIsTypedInAutoMode(self, koreanWindow):
         from anki_drill.session import STATUS_LEARNING

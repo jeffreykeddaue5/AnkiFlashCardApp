@@ -52,7 +52,19 @@ The **Mode** control (`T` cycles it) decides how each card is studied:
   Pinned, trouble, missed-today, typed-wrong and lapsing cards are typed straight away.
 - **Flip only** / **Type all**: one way for every card.
 
-A typing card asks for the Korean. Its example sentence is shown with the word blanked
+The **Answer** control (`A` cycles it, and it is remembered) decides what a typing card asks for:
+
+- **Korean: dictionary form** (default): the word as written on the card (개운하다). The
+  form from the example sentence (개운해요) also counts. After you answer, the sentence is
+  shown with that form in **bold**, so you still see the conjugation without being tested on it.
+- **Korean: sentence form**: the conjugated word that fills the sentence's gap (below).
+  Typing the dictionary form, or another form of the right word, counts as **≈ almost**.
+- **English meaning**: see the Korean, type what it means. Any meaning in the card's list
+  counts (`get motion sick, carsick`). Leading "to"/"a"/"the" and small spelling slips are
+  ignored. If your wording is right but different, press **I was right ✓** (`Ctrl+Enter`).
+  English answers aren't added to the Korean typing record.
+
+In sentence form, a typing card asks for the Korean. Its example sentence is shown with the word blanked
 out, so you type the word *with* its ending or particle:
 
     get motion sick, carsick
@@ -69,7 +81,11 @@ and any form on its `Conj:` line also counts as correct.
 | `Enter` | Check · then next card |
 | `Ctrl+H` / **Hint** | Next hint: `○○○○` → initial consonants `ㅁㅁㅎㅇ` → `멀○○○` |
 | `Ctrl+Enter` / **That was a typo** | Count an "almost" answer as correct |
-| **Show answer** | "I don't know": reveals the answer like a wrong one |
+| **Show answer** | "I don't know": reveals the answer. This is recorded as a *peek*, not a miss. Copying it is optional; Enter on an empty box moves on |
+| **Flip** / click card / `↑` `↓` | Once the answer is shown, switch between the prompt and the answer |
+| `Esc` / **↻ Try again** | Hide the answer and type the same card again (an earlier miss still brings it back next round) |
+| `Ctrl+D` / **🎯 Drill this card** | Keep the card on screen until you type it right 3 times in a row |
+| `?` / `F1` / **?** button | Keyboard cheat sheet |
 | `←` / `→` | Previous / next card, when the box is empty or the answer is checked (otherwise they move the cursor) |
 | `Alt+←` / `Alt+→` | Previous / next card, always, even mid-word |
 
@@ -284,3 +300,10 @@ should. It skips itself if PyQt5 or QtWebEngine is missing, and accounts for mos
   and leave cards in a learning step, they will not show up here.
 - No `{{tts:…}}` speech, no typed-answer checking, no LaTeX rendering.
 - If Anki is open and you study something, hit `F5` to pick up the change.
+
+## Peeks and session stats
+
+A peek (Show answer without trying) still brings the card back as ⌨ Typed wrong, but it
+doesn't count toward ⚠ Trouble word. Only real wrong answers on 2+ days do. The end-of-round
+and session-complete screens show your typing stats: right-first-try accuracy, tries per
+card, peeks, and your most-missed words.

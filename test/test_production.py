@@ -87,6 +87,48 @@ class TestBuildTypingSpec(object):
         assert spec.fullSentence == "푹 자고 일어나서 몸이 개운해요."
         assert spec.sounds == ["[sound:kaeun.mp3]"]
 
+    def test_dictionaryFormSkipsTheGap(self):
+        spec = buildTypingSpec(BASIC, dictionaryForm=True)
+        assert spec.mode != MODE_GAP
+        assert spec.answer == "개운하다"
+        assert "개운해요" not in promptHtml(spec)
+
+    def test_dictionaryModeAcceptsTheSentenceFormAndShowsIt(self):
+        spec = buildTypingSpec(BASIC, dictionaryForm=True)
+        assert checkAnswer("개운해요", spec).verdict == "correct"
+        result = checkAnswer("개운하다", spec)
+        assert "<b>개운해요</b>" in resultHtml(spec, result)
+
+    def test_sentenceModeDictionaryFormIsAlmost(self):
+        result = checkAnswer("개운하다", buildTypingSpec(BASIC))
+        assert result.verdict == "almost" and result.formOnly
+
+    def test_englishSpecAcceptsAnyListedMeaning(self):
+        spec = buildTypingSpec(BASIC, answerForm="english")
+        assert spec.mode == "english" and spec.prompt == "개운하다"
+        assert checkAnswer("Refreshed", spec).verdict == "correct"
+        assert checkAnswer("feeling clean and light", spec).verdict == "correct"
+        assert checkAnswer("refershed", spec).verdict == "almost"
+        assert checkAnswer("tired", spec).verdict == "wrong"
+        assert "type the English" in promptHtml(spec)
+        assert hintText(spec.answer, 2).startswith("r○○○")
+
+    def test_englishMeaningsDropFillerWords(self):
+        from anki_drill.production import englishMeanings, normaliseEnglish
+        assert normaliseEnglish("to get motion sick") == "getmotionsick"
+        assert "carsick" in englishMeanings("get motion sick, carsick")
+
+    def test_typingSummary(self):
+        from anki_drill.production import typingSummary
+        assert typingSummary({}) == ""
+        text = typingSummary({
+            1: {"word": "개운하다", "tries": 3, "misses": 2, "peeks": 0, "firstTry": "wrong"},
+            2: {"word": "멀미하다", "tries": 1, "misses": 0, "peeks": 0, "firstTry": "correct"},
+            3: {"word": "들뜨다", "tries": 2, "misses": 0, "peeks": 1, "firstTry": "peek"}})
+        assert "1 of 3 right first try (33%)" in text
+        assert "Most missed: 개운하다 ×2, 들뜨다 ×1" in text
+        assert "Peeked at the answer 1 time" in text
+
     def test_promptCarriesNoAudio(self):
         html = promptHtml(buildTypingSpec(BASIC))
         assert "sound" not in html and "개운해요" not in html
@@ -145,7 +187,10 @@ class TestCheckAnswer(object):
         assert checkAnswer("개우해요", self.spec).verdict == RESULT_ALMOST
 
     def test_differentFormIsWrong(self):
-        assert checkAnswer("개운했어요", self.spec).verdict == RESULT_WRONG
+        # Another form of the right word is "almost", flagged as a form slip.
+        result = checkAnswer("개운했어요", self.spec)
+        assert result.verdict == "almost" and result.formOnly
+        assert checkAnswer("좋았어요", self.spec).verdict == RESULT_WRONG
 
     def test_blankIsWrong(self):
         assert checkAnswer("", self.spec).verdict == RESULT_WRONG
@@ -176,6 +221,15 @@ class TestHints(object):
 
 
 class TestTypingStats(object):
+
+    def test_peeksAreKeptApartFromMisses(self):
+        stats = {}
+        entry = persistence.recordTypingResult(stats, 7, 100, False, peeked=True)
+        assert entry["missDays"] == [] and entry["peekDays"] == [100]
+        assert entry["peeks"] == 1 and entry["streak"] == 0
+        assert persistence.notesMissedSince(stats, 95) == [7]
+        persistence.recordTypingResult(stats, 7, 101, False, peeked=True)
+        assert persistence.notesWithMissDays(stats, 90, 2) == []
 
     def test_missesAreRecordedOncePerDay(self):
         stats = {}

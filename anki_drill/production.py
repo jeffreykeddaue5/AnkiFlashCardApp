@@ -88,12 +88,24 @@ def editDistance(left, right):
 
 TypingSpec = namedtuple(
     "TypingSpec",
-    "mode prompt sentenceHtml translation answer accepted fullSentence notes sounds")
-# mode: "gap" (type the blanked part of a sentence) or "word" (type the word itself).
+    "mode prompt sentenceHtml translation answer accepted fullSentence notes sounds "
+    "gapAnswer nearMiss")
+TypingSpec.__new__.__defaults__ = ("", ())
+# mode: "gap" (type the blanked part of a sentence), "word" (type the word itself) or
+#   "english" (see the Korean, type the meaning).
 # accepted: every normalised string that counts as correct.
+# gapAnswer: the form that fills the example sentence, when one was found.
+# nearMiss: normalised answers that are the right word in the wrong form ("almost").
 
 MODE_GAP = "gap"
 MODE_WORD = "word"
+MODE_ENGLISH = "english"
+
+# What a typing card asks for.
+ANSWER_DICTIONARY = "dictionary"   # the Korean word as written on the card
+ANSWER_SENTENCE = "sentence"       # the conjugated form that fills the example's gap
+ANSWER_ENGLISH = "english"         # the meaning, from the Korean
+ANSWER_FORMS = (ANSWER_DICTIONARY, ANSWER_SENTENCE, ANSWER_ENGLISH)
 
 # Field names tried for each role, most specific first. Matching ignores case.
 _ANSWER_FIELDS = ("chunk", "front", "korean", "vocab", "korean word", "한국어", "word")
@@ -234,12 +246,17 @@ def findGap(word, sentence):
     return best[1], best[2]
 
 
-def buildTypingSpec(fieldValues):
+def buildTypingSpec(fieldValues, dictionaryForm=False, answerForm=None):
     """Decide what to ask for a note, or return None when it has nothing typeable.
 
-    `fieldValues` maps field name to raw field HTML. A sentence gap is preferred; a note
-    without a usable example sentence falls back to typing the word itself.
+    `fieldValues` maps field name to raw field HTML. `answerForm` is one of ANSWER_FORMS
+    (`dictionaryForm=True` is shorthand for ANSWER_DICTIONARY; the default is the sentence
+    gap). Answers are forgiving both ways: in dictionary mode the sentence's conjugated
+    form also counts, and in sentence mode the dictionary form reads as "almost".
+    A note without a usable example sentence always asks for the word itself.
     """
+    if answerForm is None:
+        answerForm = ANSWER_DICTIONARY if dictionaryForm else ANSWER_SENTENCE
     answerField = _field(fieldValues, _ANSWER_FIELDS)
     promptField = _field(fieldValues, _PROMPT_FIELDS)
     # Front/Back decks are sometimes the other way round; the Korean side is the answer.
@@ -257,16 +274,19 @@ def buildTypingSpec(fieldValues):
     sounds = _soundsIn(list(fieldValues.values()))
     answer = _plain(answerField)
     prompt = promptField
+    plainSentence = _plain(sentence)
 
-    # 1. The sentence already carries a marked-up gap (Korean Type notes).
+    if answerForm == ANSWER_ENGLISH:
+        return _englishSpec(answer, promptField, plainSentence, translation, notes, sounds)
+
+    # Find the sentence gap, if there is one: (gappedHtml, gapAnswer, fullSentence).
+    gap = None
     if sentence and _MARKED_GAP_RE.search(sentence):
+        # 1. The sentence already carries a marked-up gap (Korean Type notes).
         gapped = _MARKED_GAP_RE.sub(_GAP_HTML, AV_TAG_RE.sub("", sentence), count=1)
         fullSentence = _plain(full) or _plain(_MARKED_GAP_RE.sub(answer, sentence, count=1))
-        return TypingSpec(MODE_GAP, prompt, gapped, translation, answer,
-                          [normalise(answer)], fullSentence, notes, sounds)
-
-    plainSentence = _plain(sentence)
-    if plainSentence and hasHangul(plainSentence):
+        gap = (gapped, answer, fullSentence)
+    elif plainSentence and hasHangul(plainSentence):
         # 2. A bold part marks the chunk explicitly (listening sentence cards).
         bold = _BOLD_RE.search(sentence)
         span = None
@@ -280,17 +300,64 @@ def buildTypingSpec(fieldValues):
             span = findGap(answer, plainSentence)
         if span is not None:
             start, end = span
-            gapAnswer = plainSentence[start:end]
             gapped = (html.escape(plainSentence[:start]) + _GAP_HTML
                       + html.escape(plainSentence[end:]))
-            return TypingSpec(MODE_GAP, prompt, gapped, translation, gapAnswer,
-                              [normalise(gapAnswer)], plainSentence, notes, sounds)
+            gap = (gapped, plainSentence[start:end], plainSentence)
 
-    # 4. No sentence to work with: type the word. Listed conjugations also count.
-    accepted = [normalise(answer)] + [normalise(f) for f in conjugationsFromNotes(notes)]
+    wordForms = [normalise(answer)] + [normalise(f) for f in conjugationsFromNotes(notes)]
+
+    if gap is not None and answerForm == ANSWER_SENTENCE:
+        gapped, gapAnswer, fullSentence = gap
+        nearMiss = [f for f in dict.fromkeys(wordForms) if f and f != normalise(gapAnswer)]
+        return TypingSpec(MODE_GAP, prompt, gapped, translation, gapAnswer,
+                          [normalise(gapAnswer)], fullSentence, notes, sounds,
+                          gapAnswer, nearMiss)
+
+    # 4. Type the word. Listed conjugations, and the sentence's own form, also count.
+    gapAnswer = gap[1] if gap is not None else ""
+    fullSentence = gap[2] if gap is not None else plainSentence
+    accepted = wordForms + [normalise(gapAnswer)]
     return TypingSpec(MODE_WORD, prompt, "", translation, answer,
                       list(dict.fromkeys(a for a in accepted if a)),
-                      plainSentence, notes, sounds)
+                      fullSentence, notes, sounds, gapAnswer, ())
+
+
+# ---------------------------------------------------------------- English direction
+
+_ENGLISH_FILLER_RE = re.compile(r"^(to|a|an|the|be)\s+", re.I)
+_PARENS_RE = re.compile(r"\([^)]*\)|\[[^\]]*\]")
+
+
+def normaliseEnglish(text):
+    """Lower-case letters and digits only, leading "to"/"a"/"the" dropped."""
+    text = unicodedata.normalize("NFKC", stripHtml(text or "")).lower().strip()
+    text = _PARENS_RE.sub(" ", text)
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    previous = None
+    while previous != text:
+        previous, text = text, _ENGLISH_FILLER_RE.sub("", text)
+    return text.replace(" ", "")
+
+
+def englishMeanings(text):
+    """Split a meaning field like "get motion sick, carsick; (to) feel ill" into options."""
+    plain = _plain(text)
+    pieces = re.split(r"[,;/]|\bor\b", _PARENS_RE.sub(lambda m: m.group(0).replace(",", " "),
+                                                         plain))
+    whole = normaliseEnglish(plain)
+    found = [normaliseEnglish(p) for p in pieces] + [whole]
+    return list(dict.fromkeys(f for f in found if f))
+
+
+def _englishSpec(korean, meaning, sentence, translation, notes, sounds):
+    """Korean → English: show the word, type its meaning."""
+    meaning = _plain(meaning)
+    accepted = englishMeanings(meaning)
+    if not accepted:
+        return None
+    return TypingSpec(MODE_ENGLISH, korean, "", translation, meaning, accepted,
+                      sentence, notes, sounds, "", ())
 
 
 # ---------------------------------------------------------------- checking
@@ -299,7 +366,14 @@ RESULT_CORRECT = "correct"
 RESULT_ALMOST = "almost"
 RESULT_WRONG = "wrong"
 
-CheckResult = namedtuple("CheckResult", "verdict typed answer distance")
+CheckResult = namedtuple("CheckResult", "verdict typed answer distance formOnly")
+CheckResult.__new__.__defaults__ = (False,)
+# formOnly: an "almost" because the right word was typed in the wrong form.
+
+
+def _normaliseFor(spec, text):
+    """The comparison form of `text` for this kind of card."""
+    return normaliseEnglish(text) if spec.mode == MODE_ENGLISH else normalise(text)
 
 
 def checkAnswer(typed, spec):
@@ -308,11 +382,19 @@ def checkAnswer(typed, spec):
     Distances are counted in jamo, so 개운헤요 for 개운해요 is one letter (ㅔ for ㅐ) away.
     Longer answers are allowed one more slip before "almost" becomes "wrong".
     """
-    given = normalise(typed)
+    given = _normaliseFor(spec, typed)
     if not given:
         return CheckResult(RESULT_WRONG, typed, spec.answer, None)
     if given in spec.accepted:
         return CheckResult(RESULT_CORRECT, typed, spec.answer, 0)
+    if given in spec.nearMiss:
+        return CheckResult(RESULT_ALMOST, typed, spec.answer, None, True)
+    if spec.mode == MODE_ENGLISH:
+        # Letters, not jamo; a little more slack, since spelling is not the point here.
+        distance = min(editDistance(given, a) for a in spec.accepted)
+        allowance = 1 if len(given) < 6 else 2
+        verdict = RESULT_ALMOST if distance <= allowance else RESULT_WRONG
+        return CheckResult(verdict, typed, spec.answer, distance)
     givenJamo = toJamo(given)
     distance = min(editDistance(givenJamo, toJamo(a)) for a in spec.accepted)
     allowance = 1 if len(toJamo(spec.accepted[0])) < 12 else 2
@@ -322,7 +404,7 @@ def checkAnswer(typed, spec):
 
 def matchesForRetype(typed, spec):
     """True when a retyped answer is exactly right (spacing and punctuation aside)."""
-    return normalise(typed) in spec.accepted
+    return _normaliseFor(spec, typed) in spec.accepted
 
 
 def letterNotes(typed, answer):
@@ -386,6 +468,8 @@ def hintText(answer, level):
     if level <= 0:
         return ""
     answer = _plain(answer)
+    if not hasHangul(answer):
+        return _englishHint(answer, level)
     out = []
     for position, char in enumerate(answer):
         parts = syllableParts(char)
@@ -402,10 +486,33 @@ def hintText(answer, level):
     return "".join(out)
 
 
+def _englishHint(answer, level):
+    """1: one ○ per letter.  2: first letter of each word.  3: the first word."""
+    first = re.split(r"[,;/]", answer)[0].strip()
+    words = first.split()
+    out = []
+    for index, word in enumerate(words):
+        if level >= 3 and index == 0:
+            out.append(word)
+        elif level >= 2:
+            out.append(word[0] + "○" * (len(word) - 1))
+        else:
+            out.append("○" * len(word))
+    return " ".join(out)
+
+
 # ---------------------------------------------------------------- card faces
 
 def promptHtml(spec, hintLevel=0):
     """HTML for the question face of a typing card. Carries no audio, which would leak."""
+    if spec.mode == MODE_ENGLISH:
+        parts = ['<div class="tp-card">', '<div class="tp-tag">type the English</div>',
+                 '<div class="tp-prompt" lang="ko">%s</div>' % html.escape(spec.prompt)]
+        hint = hintText(spec.answer, hintLevel)
+        if hint:
+            parts.append('<div class="tp-hint">hint: %s</div>' % html.escape(hint))
+        parts.append("</div>")
+        return "".join(parts)
     parts = ['<div class="tp-card">', '<div class="tp-tag">type the Korean</div>']
     if spec.prompt:
         parts.append('<div class="tp-prompt">%s</div>' % AV_TAG_RE.sub("", spec.prompt))
@@ -431,10 +538,19 @@ _VERDICT_LABELS = {
 def resultHtml(spec, result, hintLevel=0):
     """HTML for the answer face: verdict, comparison, the full sentence and its audio."""
     css, label = _VERDICT_LABELS[result.verdict]
+    if getattr(result, "formOnly", False):
+        label = "≈ Right word: now put it in the sentence's form"
+    elif result.verdict == RESULT_ALMOST and spec.mode == MODE_ENGLISH:
+        label = "≈ Almost: a spelling slip"
     if result.verdict == RESULT_CORRECT and hintLevel:
         label += " (with a hint)"
     parts = ['<div class="tp-card">', '<div class="tp-verdict %s">%s</div>' % (css, label)]
-    if result.verdict != RESULT_CORRECT:
+    if result.verdict != RESULT_CORRECT and spec.mode == MODE_ENGLISH:
+        parts.append('<div class="tp-compare"><div><span class="tp-key">you</span> %s</div>'
+                     '<div><span class="tp-key">answer</span> %s</div></div>'
+                     % (html.escape(result.typed) or "<i>(blank)</i>",
+                        html.escape(spec.answer)))
+    elif result.verdict != RESULT_CORRECT:
         typedHtml, answerHtml = diffHtml(result.typed, spec.answer)
         parts.append('<div class="tp-compare"><div><span class="tp-key">you</span> %s</div>'
                      '<div><span class="tp-key">answer</span> %s</div></div>'
@@ -448,17 +564,49 @@ def resultHtml(spec, result, hintLevel=0):
 
     if spec.fullSentence:
         sentence = html.escape(spec.fullSentence)
-        if spec.mode == MODE_GAP:
-            sentence = sentence.replace(html.escape(spec.answer),
-                                        "<b>%s</b>" % html.escape(spec.answer), 1)
+        # The form the word takes in the sentence, bolded: in dictionary mode this is where
+        # the conjugation is shown without being tested.
+        bold = spec.gapAnswer or (spec.answer if spec.mode == MODE_GAP else "")
+        if bold:
+            sentence = sentence.replace(html.escape(bold), "<b>%s</b>" % html.escape(bold), 1)
         parts.append('<div class="tp-sentence">%s</div>' % sentence)
     if spec.translation:
         parts.append('<div class="tp-translation">%s</div>' % html.escape(spec.translation))
     if result.verdict == RESULT_WRONG:
-        parts.append('<div class="tp-retype">Type the answer once to move on.</div>')
+        parts.append('<div class="tp-retype">Copy it to practise, or Enter to move on. '
+                     'Esc: try again.</div>')
     if spec.notes:
         parts.append('<div class="tp-notes">%s</div>' % AV_TAG_RE.sub("", spec.notes))
     if spec.sounds:
         parts.append('<div class="tp-sounds">%s</div>' % replaceAvTags("".join(spec.sounds)))
     parts.append("</div>")
     return "".join(parts)
+
+
+# ---------------------------------------------------------------- session summary
+
+def typingSummary(log, top=5):
+    """Plain-text stats for the typing done this session.
+
+    `log` maps card id to {"word", "tries", "misses", "peeks", "firstTry"}, where
+    firstTry is the first attempt's outcome: "correct", "hint", "almost", "wrong" or
+    "peek". Returns '' when nothing was typed.
+    """
+    entries = [e for e in (log or {}).values() if e.get("tries")]
+    if not entries:
+        return ""
+    typed = len(entries)
+    firstRight = sum(1 for e in entries if e.get("firstTry") == "correct")
+    tries = sum(e["tries"] for e in entries)
+    lines = ["Typing: %d of %d right first try (%d%%)  ·  %.1f tries per card"
+             % (firstRight, typed, round(100.0 * firstRight / typed), float(tries) / typed)]
+    peeks = sum(e.get("peeks", 0) for e in entries)
+    if peeks:
+        lines.append("Peeked at the answer %d time%s" % (peeks, "" if peeks == 1 else "s"))
+    missed = sorted((e for e in entries if e.get("misses", 0) + e.get("peeks", 0)),
+                    key=lambda e: (-(e.get("misses", 0) + e.get("peeks", 0)), e["word"]))
+    if missed:
+        lines.append("Most missed: " + ", ".join(
+            "%s ×%d" % (e["word"], e.get("misses", 0) + e.get("peeks", 0))
+            for e in missed[:top]))
+    return "\n".join(lines)

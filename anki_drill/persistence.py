@@ -197,16 +197,27 @@ def saveTypingStats(stats):
     os.replace(tempPath, TYPING_PATH)
 
 
-def recordTypingResult(stats, noteId, studyDay, correct, word=""):
+def recordTypingResult(stats, noteId, studyDay, correct, word="", peeked=False):
     """Fold one typed answer into `stats` (in place) and return the note's entry.
 
     A miss records the study day (once per day) and resets the streak; a clean correct
-    answer extends the streak. Days older than TYPING_KEEP_DAYS are dropped as we go.
+    answer extends the streak. A peek ("Show answer" without trying) resets the streak too
+    but goes in `peekDays`, not `missDays`, so it brings the card back without counting
+    toward "trouble word". Days older than TYPING_KEEP_DAYS are dropped as we go.
     """
     entry = stats.setdefault(str(noteId), {"missDays": [], "streak": 0, "correct": 0})
+    cutoff = studyDay - TYPING_KEEP_DAYS
     entry["missDays"] = [d for d in entry.get("missDays", [])
-                         if isinstance(d, int) and d > studyDay - TYPING_KEEP_DAYS]
-    if correct:
+                         if isinstance(d, int) and d > cutoff]
+    if "peekDays" in entry:
+        entry["peekDays"] = [d for d in entry["peekDays"] if isinstance(d, int) and d > cutoff]
+    if peeked:
+        entry["streak"] = 0
+        entry["peeks"] = int(entry.get("peeks", 0)) + 1
+        days = entry.setdefault("peekDays", [])
+        if studyDay not in days:
+            days.append(int(studyDay))
+    elif correct:
         entry["streak"] = int(entry.get("streak", 0)) + 1
         entry["correct"] = int(entry.get("correct", 0)) + 1
     else:
@@ -220,10 +231,11 @@ def recordTypingResult(stats, noteId, studyDay, correct, word=""):
 
 
 def notesMissedSince(stats, firstDay):
-    """Note ids typed wrong on or after study day `firstDay`."""
+    """Note ids typed wrong, or peeked at, on or after study day `firstDay`."""
     found = []
     for key, entry in (stats or {}).items():
-        days = entry.get("missDays", []) if isinstance(entry, dict) else []
+        days = (entry.get("missDays", []) + entry.get("peekDays", [])
+                if isinstance(entry, dict) else [])
         if any(isinstance(d, int) and d >= firstDay for d in days):
             try:
                 found.append(int(key))
@@ -243,3 +255,29 @@ def notesWithMissDays(stats, firstDay, minimumDays):
             except ValueError:
                 continue
     return found
+
+
+# ---------------------------------------------------------------- settings
+
+SETTINGS_PATH = os.path.join(APP_DIR, "settings.json")
+
+
+def loadSettings():
+    """Return the app's small preferences dict ({} when missing or unreadable)."""
+    try:
+        with open(SETTINGS_PATH, "r") as handle:
+            data = json.load(handle)
+    except (IOError, OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def saveSettings(settings):
+    """Atomically write the preferences dict."""
+    folder = os.path.dirname(SETTINGS_PATH)
+    if not os.path.isdir(folder):
+        os.makedirs(folder)
+    tempPath = SETTINGS_PATH + ".tmp"
+    with open(tempPath, "w") as handle:
+        json.dump(settings, handle, indent=1, sort_keys=True, ensure_ascii=False)
+    os.replace(tempPath, SETTINGS_PATH)

@@ -37,3 +37,5 @@ def isolateTypingStats(tmp_path, monkeypatch):
     monkeypatch.setattr(persistence, "APP_DIR", str(tmp_path / "app-state"))
     monkeypatch.setattr(persistence, "STATE_PATH",
                         str(tmp_path / "app-state" / "session-state.json"))
+    monkeypatch.setattr(persistence, "SETTINGS_PATH",
+                        str(tmp_path / "app-state" / "settings.json"))

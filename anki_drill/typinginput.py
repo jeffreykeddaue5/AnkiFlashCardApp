@@ -17,11 +17,13 @@ from PyQt5.QtWidgets import QLineEdit
 class TypingLineEdit(QLineEdit):
     """Answer box. Emits `submitted(text)` on Enter, `accepted()` on Ctrl+Enter, and
     `navigate(step)` (-1 / +1) on Left / Right when there is nothing to move the cursor
-    through: the box is empty, or the answer has been checked (read-only)."""
+    through: the box is empty, or the answer has been checked (read-only), and
+    `flipRequested()` on Up / Down (the window ignores it until the answer is revealed)."""
 
     submitted = pyqtSignal(str)
     accepted = pyqtSignal()
     navigate = pyqtSignal(int)
+    flipRequested = pyqtSignal()
 
     def __init__(self, parent=None):
         super(TypingLineEdit, self).__init__(parent)
@@ -54,6 +56,9 @@ class TypingLineEdit(QLineEdit):
                 return
             # Let any commit triggered by this key land first.
             QTimer.singleShot(0, self._emitSubmit)
+            return
+        if event.key() in (Qt.Key_Up, Qt.Key_Down) and not event.modifiers():
+            self.flipRequested.emit()
             return
         if event.key() in (Qt.Key_Left, Qt.Key_Right) and not event.modifiers():
             if self.isReadOnly() or not self.answerText():
